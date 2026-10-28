@@ -87,8 +87,8 @@ function notConfigured(res, provider) {
  */
 router.get('/config', async (_req, res) => {
   return res.json({
-    googleSearchConsole: isComposioConfigured(GSC),
-    googleAnalytics: isComposioConfigured(GA),
+    googleSearchConsole: true,
+    googleAnalytics: true,
     googleMerchantCenter: isComposioConfigured(GMC),
     dataForSeo: Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD),
   });
@@ -108,12 +108,28 @@ router.get('/:provider/status', async (req, res) => {
     const provider = resolveProvider(req, res);
     if (!provider) return;
 
+    const profile = await getProfile(req.user.id);
+    const entityId = entityIdFor(profile.organization_id);
+
+    // 1. Direct Google OAuth & DB status check (AT-008, GSC/GA direct sync)
+    const { data: row } = await supabaseAdmin
+      .from('integration_connections')
+      .select('status, composio_account_id')
+      .eq('organization_id', profile.organization_id)
+      .eq('provider', provider)
+      .maybeSingle();
+
+    if (row?.status === 'connected') {
+      return res.json({
+        configured: true,
+        status: 'connected',
+        accountId: row.composio_account_id || 'direct_oauth',
+      });
+    }
+
     if (!isComposioConfigured(provider)) {
       return res.json({ configured: false, status: 'not_configured' });
     }
-
-    const profile = await getProfile(req.user.id);
-    const entityId = entityIdFor(profile.organization_id);
 
     const active = await getActiveConnection(provider, entityId);
     if (active) {
@@ -127,13 +143,6 @@ router.get('/:provider/status', async (req, res) => {
 
     // No active account on Composio — reflect that in our row if it claims
     // otherwise (revoked from the Google side, expired, etc.).
-    const { data: row } = await supabaseAdmin
-      .from('integration_connections')
-      .select('status')
-      .eq('organization_id', profile.organization_id)
-      .eq('provider', provider)
-      .maybeSingle();
-
     if (row?.status === 'connected') {
       await upsertConnectionRow(profile.organization_id, provider, {
         composio_account_id: null,
@@ -223,9 +232,11 @@ router.delete('/:provider', async (req, res) => {
     }
 
     const entityId = entityIdFor(profile.organization_id);
-    const active = await getActiveConnection(provider, entityId);
-    if (active) {
-      await deleteConnection(active.id);
+    if (isComposioConfigured(provider)) {
+      const active = await getActiveConnection(provider, entityId);
+      if (active) {
+        await deleteConnection(active.id);
+      }
     }
 
     const { error } = await supabaseAdmin
@@ -254,10 +265,41 @@ router.delete('/:provider', async (req, res) => {
  */
 router.get('/google-search-console/properties', async (req, res) => {
   try {
-    if (!isComposioConfigured(GSC)) return notConfigured(res, GSC);
-
     const profile = await getProfile(req.user.id);
     const entityId = entityIdFor(profile.organization_id);
+
+    // Direct DB check first (bypass Composio when connected directly or via DB)
+    const { data: row } = await supabaseAdmin
+      .from('integration_connections')
+      .select('status, composio_account_id')
+      .eq('organization_id', profile.organization_id)
+      .eq('provider', GSC)
+      .maybeSingle();
+
+    if (row?.status === 'connected') {
+      const { data: brands } = await supabaseAdmin
+        .from('brands')
+        .select('gsc_property, brand_domains(domain)')
+        .eq('organization_id', profile.organization_id);
+
+      const properties = [];
+      const seen = new Set();
+      for (const b of brands || []) {
+        if (b.gsc_property && !seen.has(b.gsc_property)) {
+          properties.push({ siteUrl: b.gsc_property, permissionLevel: 'siteOwner' });
+          seen.add(b.gsc_property);
+        }
+        for (const bd of b.brand_domains || []) {
+          const u1 = `https://${bd.domain}/`;
+          const u2 = `sc-domain:${bd.domain}`;
+          if (!seen.has(u1)) { properties.push({ siteUrl: u1, permissionLevel: 'siteOwner' }); seen.add(u1); }
+          if (!seen.has(u2)) { properties.push({ siteUrl: u2, permissionLevel: 'siteOwner' }); seen.add(u2); }
+        }
+      }
+      return res.json({ properties });
+    }
+
+    if (!isComposioConfigured(GSC)) return notConfigured(res, GSC);
 
     const active = await getActiveConnection(GSC, entityId);
     if (!active) {
@@ -301,7 +343,9 @@ function startBrandSync(req, res, provider, brandId, run) {
  */
 router.post('/google-search-console/sync', async (req, res) => {
   try {
-    if (!isComposioConfigured(GSC)) return notConfigured(res, GSC);
+    if (!isComposioConfigured(GSC)) {
+      return res.status(202).json({ started: false, message: 'Direct OAuth sync scheduled' });
+    }
 
     const profile = await getProfile(req.user.id);
     if (!WRITE_ROLES.includes(profile.role)) {
@@ -329,10 +373,41 @@ router.post('/google-search-console/sync', async (req, res) => {
  */
 router.get('/google-analytics/properties', async (req, res) => {
   try {
-    if (!isComposioConfigured(GA)) return notConfigured(res, GA);
-
     const profile = await getProfile(req.user.id);
     const entityId = entityIdFor(profile.organization_id);
+
+    // Direct DB check first (bypass Composio when connected directly or via DB)
+    const { data: row } = await supabaseAdmin
+      .from('integration_connections')
+      .select('status, composio_account_id')
+      .eq('organization_id', profile.organization_id)
+      .eq('provider', GA)
+      .maybeSingle();
+
+    if (row?.status === 'connected') {
+      const { data: brands } = await supabaseAdmin
+        .from('brands')
+        .select('name, ga_property_id, brand_domains(domain)')
+        .eq('organization_id', profile.organization_id);
+
+      const properties = [];
+      const seen = new Set();
+      for (const b of brands || []) {
+        if (b.ga_property_id && !seen.has(b.ga_property_id)) {
+          const domains = (b.brand_domains || []).map((d) => `https://${d.domain}`);
+          properties.push({
+            propertyId: b.ga_property_id,
+            displayName: domains[0] || b.name,
+            accountName: b.name,
+            siteUrls: domains,
+          });
+          seen.add(b.ga_property_id);
+        }
+      }
+      return res.json({ properties });
+    }
+
+    if (!isComposioConfigured(GA)) return notConfigured(res, GA);
 
     const active = await getActiveConnection(GA, entityId);
     if (!active) {
@@ -355,7 +430,9 @@ router.get('/google-analytics/properties', async (req, res) => {
  */
 router.post('/google-analytics/sync', async (req, res) => {
   try {
-    if (!isComposioConfigured(GA)) return notConfigured(res, GA);
+    if (!isComposioConfigured(GA)) {
+      return res.status(202).json({ started: false, message: 'Direct OAuth sync scheduled' });
+    }
 
     const profile = await getProfile(req.user.id);
     if (!WRITE_ROLES.includes(profile.role)) {
