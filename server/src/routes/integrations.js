@@ -279,8 +279,19 @@ router.get('/google-search-console/properties', async (req, res) => {
     if (row?.status === 'connected') {
       const { data: brands } = await supabaseAdmin
         .from('brands')
-        .select('gsc_property, brand_domains(domain)')
+        .select('id, gsc_property')
         .eq('organization_id', profile.organization_id);
+
+      const brandIds = (brands || []).map((b) => b.id);
+      const { data: domainRows } = brandIds.length > 0
+        ? await supabaseAdmin.from('brand_domains').select('brand_id, domain').in('brand_id', brandIds)
+        : { data: [] };
+
+      const domainsByBrand = new Map();
+      for (const d of domainRows || []) {
+        if (!domainsByBrand.has(d.brand_id)) domainsByBrand.set(d.brand_id, []);
+        domainsByBrand.get(d.brand_id).push(d.domain);
+      }
 
       const properties = [];
       const seen = new Set();
@@ -289,9 +300,9 @@ router.get('/google-search-console/properties', async (req, res) => {
           properties.push({ siteUrl: b.gsc_property, permissionLevel: 'siteOwner' });
           seen.add(b.gsc_property);
         }
-        for (const bd of b.brand_domains || []) {
-          const u1 = `https://${bd.domain}/`;
-          const u2 = `sc-domain:${bd.domain}`;
+        for (const domain of domainsByBrand.get(b.id) || []) {
+          const u1 = `https://${domain}/`;
+          const u2 = `sc-domain:${domain}`;
           if (!seen.has(u1)) { properties.push({ siteUrl: u1, permissionLevel: 'siteOwner' }); seen.add(u1); }
           if (!seen.has(u2)) { properties.push({ siteUrl: u2, permissionLevel: 'siteOwner' }); seen.add(u2); }
         }
@@ -387,14 +398,25 @@ router.get('/google-analytics/properties', async (req, res) => {
     if (row?.status === 'connected') {
       const { data: brands } = await supabaseAdmin
         .from('brands')
-        .select('name, ga_property_id, brand_domains(domain)')
+        .select('id, name, ga_property_id')
         .eq('organization_id', profile.organization_id);
+
+      const brandIds = (brands || []).map((b) => b.id);
+      const { data: domainRows } = brandIds.length > 0
+        ? await supabaseAdmin.from('brand_domains').select('brand_id, domain').in('brand_id', brandIds)
+        : { data: [] };
+
+      const domainsByBrand = new Map();
+      for (const d of domainRows || []) {
+        if (!domainsByBrand.has(d.brand_id)) domainsByBrand.set(d.brand_id, []);
+        domainsByBrand.get(d.brand_id).push(d.domain);
+      }
 
       const properties = [];
       const seen = new Set();
       for (const b of brands || []) {
         if (b.ga_property_id && !seen.has(b.ga_property_id)) {
-          const domains = (b.brand_domains || []).map((d) => `https://${d.domain}`);
+          const domains = (domainsByBrand.get(b.id) || []).map((d) => `https://${d}`);
           properties.push({
             propertyId: b.ga_property_id,
             displayName: domains[0] || b.name,
