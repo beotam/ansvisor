@@ -31,9 +31,13 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 export async function getIntegrationStatus(
   provider: IntegrationProvider,
+  brandId?: string | null,
 ): Promise<IntegrationStatusResult> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/integrations/${provider}/status`, {
+    const url = brandId
+      ? `${API_BASE_URL}/api/integrations/${provider}/status?brandId=${encodeURIComponent(brandId)}`
+      : `${API_BASE_URL}/api/integrations/${provider}/status`;
+    const res = await fetch(url, {
       headers: await authHeaders(),
       cache: 'no-store',
     });
@@ -155,19 +159,26 @@ export async function getSuggestionSourceStates(brandId: string): Promise<Sugges
 export async function connectIntegration(
   provider: IntegrationProvider,
   callbackUrl: string,
+  brandId?: string | null,
 ): Promise<{ redirectUrl: string }> {
   const res = await fetch(`${API_BASE_URL}/api/integrations/${provider}/connect`, {
     method: 'POST',
     headers: await authHeaders(),
-    body: JSON.stringify({ callbackUrl }),
+    body: JSON.stringify({ callbackUrl, brandId }),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `Server error: ${res.status}`);
   return body as { redirectUrl: string };
 }
 
-export async function disconnectIntegration(provider: IntegrationProvider): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/integrations/${provider}`, {
+export async function disconnectIntegration(
+  provider: IntegrationProvider,
+  brandId?: string | null,
+): Promise<void> {
+  const url = brandId
+    ? `${API_BASE_URL}/api/integrations/${provider}?brandId=${encodeURIComponent(brandId)}`
+    : `${API_BASE_URL}/api/integrations/${provider}`;
+  const res = await fetch(url, {
     method: 'DELETE',
     headers: await authHeaders(),
   });
@@ -200,9 +211,12 @@ export interface GscProperty {
   permissionLevel: string | null;
 }
 
-export async function getGscProperties(): Promise<GscProperty[]> {
+export async function getGscProperties(brandId?: string | null): Promise<GscProperty[]> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/integrations/google-search-console/properties`, {
+    const url = brandId
+      ? `${API_BASE_URL}/api/integrations/google-search-console/properties?brandId=${encodeURIComponent(brandId)}`
+      : `${API_BASE_URL}/api/integrations/google-search-console/properties`;
+    const res = await fetch(url, {
       headers: await authHeaders(),
       cache: 'no-store',
     });
@@ -259,9 +273,12 @@ export interface GaProperty {
   siteUrls: string[];
 }
 
-export async function getGaProperties(): Promise<GaProperty[]> {
+export async function getGaProperties(brandId?: string | null): Promise<GaProperty[]> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/integrations/google-analytics/properties`, {
+    const url = brandId
+      ? `${API_BASE_URL}/api/integrations/google-analytics/properties?brandId=${encodeURIComponent(brandId)}`
+      : `${API_BASE_URL}/api/integrations/google-analytics/properties`;
+    const res = await fetch(url, {
       headers: await authHeaders(),
       cache: 'no-store',
     });

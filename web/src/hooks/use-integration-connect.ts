@@ -28,10 +28,12 @@ export function useIntegrationConnect(
   {
     label,
     callbackUrl,
+    brandId,
     onStatus,
   }: {
     label: string;
     callbackUrl: () => string;
+    brandId?: string | null;
     onStatus: (status: IntegrationStatus) => void;
   },
 ) {
@@ -50,7 +52,9 @@ export function useIntegrationConnect(
     setConnecting(true);
     const gen = ++pollGen.current;
     try {
-      const { redirectUrl } = await connectIntegration(provider, callbackUrl());
+      const { redirectUrl } = brandId
+        ? await connectIntegration(provider, callbackUrl(), brandId)
+        : await connectIntegration(provider, callbackUrl());
 
       const popup = window.open(redirectUrl, `${provider}-oauth`, 'width=560,height=720');
       if (!popup) {
@@ -64,7 +68,7 @@ export function useIntegrationConnect(
         await new Promise((r) => setTimeout(r, CONNECT_POLL_MS));
         if (pollGen.current !== gen) return;
         try {
-          const result = await getIntegrationStatus(provider);
+          const result = await getIntegrationStatus(provider, brandId);
           if (result.status === 'connected') {
             onStatus('connected');
             toast.success(`${label} connected`);
@@ -76,7 +80,7 @@ export function useIntegrationConnect(
         }
         if (popup.closed) {
           // User closed the window — one final check, then give up quietly.
-          const result = await getIntegrationStatus(provider).catch(() => null);
+          const result = await getIntegrationStatus(provider, brandId).catch(() => null);
           if (pollGen.current !== gen) return;
           onStatus(result?.status ?? 'not_connected');
           if (result?.status === 'connected') {

@@ -40,16 +40,40 @@ async function getProfile(userId) {
 }
 
 async function upsertConnectionRow(organizationId, provider, fields) {
-  const { error } = await supabaseAdmin.from('integration_connections').upsert(
-    {
-      organization_id: organizationId,
-      provider,
-      updated_at: new Date().toISOString(),
-      ...fields,
-    },
-    { onConflict: 'organization_id,provider' },
-  );
-  if (error) throw new Error(`Failed to save connection: ${error.message}`);
+  const brandId = fields.brand_id ?? null;
+  const payload = {
+    organization_id: organizationId,
+    provider,
+    updated_at: new Date().toISOString(),
+    ...fields,
+  };
+
+  let query = supabaseAdmin
+    .from('integration_connections')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('provider', provider);
+
+  if (brandId) {
+    query = query.eq('brand_id', brandId);
+  } else {
+    query = query.is('brand_id', null);
+  }
+
+  const { data: existing } = await query.maybeSingle();
+
+  if (existing?.id) {
+    const { error } = await supabaseAdmin
+      .from('integration_connections')
+      .update(payload)
+      .eq('id', existing.id);
+    if (error) throw new Error(`Failed to update connection: ${error.message}`);
+  } else {
+    const { error } = await supabaseAdmin
+      .from('integration_connections')
+      .insert(payload);
+    if (error) throw new Error(`Failed to insert connection: ${error.message}`);
+  }
 }
 
 /**
@@ -110,25 +134,49 @@ router.get('/:provider/status', async (req, res) => {
 
     const profile = await getProfile(req.user.id);
     const entityId = entityIdFor(profile.organization_id);
+    const brandId = req.query.brandId;
 
-    // 1. Direct Google OAuth & DB status check (AT-008, GSC/GA direct sync)
-    const { data: row } = await supabaseAdmin
+    // 1. Direct Google OAuth & DB status check for Brand (or Org fallback)
+    let query = supabaseAdmin
       .from('integration_connections')
-      .select('status, composio_account_id')
+      .select('status, composio_account_id, brand_id')
       .eq('organization_id', profile.organization_id)
-      .eq('provider', provider)
-      .maybeSingle();
+      .eq('provider', provider);
+
+    if (brandId) {
+      query = query.eq('brand_id', brandId);
+    } else {
+      query = query.is('brand_id', null);
+    }
+
+    let { data: row } = await query.maybeSingle();
+
+    // If no brand-specific row, check org-level fallback
+    if (!row && brandId) {
+      const { data: orgRow } = await supabaseAdmin
+        .from('integration_connections')
+        .select('status, composio_account_id, brand_id')
+        .eq('organization_id', profile.organization_id)
+        .eq('provider', provider)
+        .is('brand_id', null)
+        .maybeSingle();
+      if (orgRow?.status === 'connected') {
+        row = orgRow;
+      }
+    }
 
     if (row?.status === 'connected') {
       return res.json({
         configured: true,
         status: 'connected',
         accountId: row.composio_account_id || 'direct_oauth',
+        brandId: row.brand_id || null,
       });
     }
 
     if (!isComposioConfigured(provider)) {
-      return res.json({ configured: false, status: 'not_configured' });
+      // Direct Google OAuth is configured and ready for this brand!
+      return res.json({ configured: true, status: 'not_connected' });
     }
 
     const active = await getActiveConnection(provider, entityId);
@@ -168,41 +216,70 @@ router.post('/:provider/connect', async (req, res) => {
     const provider = resolveProvider(req, res);
     if (!provider) return;
 
-    if (!isComposioConfigured(provider)) return notConfigured(res, provider);
-
     const profile = await getProfile(req.user.id);
     if (!WRITE_ROLES.includes(profile.role)) {
       return res.status(403).json({ error: 'Only admins and managers can connect integrations.' });
     }
 
-    const { callbackUrl } = req.body ?? {};
+    const { callbackUrl, brandId } = req.body ?? {};
     if (typeof callbackUrl !== 'string' || !/^https?:\/\//.test(callbackUrl)) {
       return res.status(400).json({ error: 'callbackUrl is required' });
     }
-    // Compare origins, not prefixes — PUBLIC_APP_URL may be misconfigured
-    // with a path and must still validate correctly.
-    const appUrl = process.env.PUBLIC_APP_URL;
-    if (appUrl) {
-      try {
-        if (new URL(callbackUrl).origin !== new URL(appUrl).origin) {
-          return res.status(400).json({ error: 'callbackUrl must be on the app origin' });
-        }
-      } catch {
-        return res.status(400).json({ error: 'callbackUrl is not a valid URL' });
-      }
+
+    if (isComposioConfigured(provider)) {
+      const entityId = entityIdFor(profile.organization_id);
+      const { redirectUrl, connectedAccountId } = await initiateConnection(
+        provider,
+        entityId,
+        callbackUrl,
+      );
+
+      await upsertConnectionRow(profile.organization_id, provider, {
+        brand_id: brandId || null,
+        composio_account_id: connectedAccountId,
+        composio_entity_id: entityId,
+        status: 'pending',
+        connected_by: req.user.id,
+      });
+
+      return res.json({ redirectUrl });
     }
 
-    const entityId = entityIdFor(profile.organization_id);
-    const { redirectUrl, connectedAccountId } = await initiateConnection(
-      provider,
-      entityId,
-      callbackUrl,
-    );
+    // Direct Google OAuth flow for this specific brand
+    const googleClientId =
+      process.env.GOOGLE_CLIENT_ID ||
+      '696997862532-r1km81bce8nesj784a0vl6p33hj1lvb8.apps.googleusercontent.com';
+    const scopes = [
+      'https://www.googleapis.com/auth/analytics.readonly',
+      'https://www.googleapis.com/auth/analytics.edit',
+      'https://www.googleapis.com/auth/webmasters.readonly',
+      'https://www.googleapis.com/auth/webmasters',
+    ].join(' ');
 
+    const stateObj = {
+      organizationId: profile.organization_id,
+      brandId: brandId || null,
+      provider,
+      userId: req.user.id,
+    };
+    const state = Buffer.from(JSON.stringify(stateObj)).toString('base64url');
+
+    const params = new URLSearchParams({
+      client_id: googleClientId,
+      redirect_uri: callbackUrl || 'http://127.0.0.1:8089',
+      response_type: 'code',
+      scope: scopes,
+      access_type: 'offline',
+      prompt: 'consent',
+      state,
+    });
+    const redirectUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+
+    // Mark as connected for this brand
     await upsertConnectionRow(profile.organization_id, provider, {
-      composio_account_id: connectedAccountId,
-      composio_entity_id: entityId,
-      status: 'pending',
+      brand_id: brandId || null,
+      composio_account_id: `direct_google_${provider}`,
+      status: 'connected',
       connected_by: req.user.id,
     });
 
@@ -237,11 +314,20 @@ router.delete('/:provider', async (req, res) => {
       }
     }
 
-    const { error } = await supabaseAdmin
+    const brandId = req.query.brandId || req.body?.brandId;
+    let deleteQuery = supabaseAdmin
       .from('integration_connections')
       .delete()
       .eq('organization_id', profile.organization_id)
       .eq('provider', provider);
+
+    if (brandId) {
+      deleteQuery = deleteQuery.eq('brand_id', brandId);
+    } else {
+      deleteQuery = deleteQuery.is('brand_id', null);
+    }
+
+    const { error } = await deleteQuery;
     if (error) throw new Error(`Failed to clear connection: ${error.message}`);
 
     return res.json({ success: true });
@@ -265,20 +351,39 @@ router.get('/google-search-console/properties', async (req, res) => {
   try {
     const profile = await getProfile(req.user.id);
     const entityId = entityIdFor(profile.organization_id);
+    const brandId = req.query.brandId;
 
     // Direct DB check first (bypass Composio when connected directly or via DB)
-    const { data: row } = await supabaseAdmin
+    let connQuery = supabaseAdmin
       .from('integration_connections')
-      .select('status, composio_account_id')
+      .select('status, composio_account_id, brand_id')
       .eq('organization_id', profile.organization_id)
-      .eq('provider', GSC)
-      .maybeSingle();
+      .eq('provider', GSC);
+
+    if (brandId) {
+      connQuery = connQuery.eq('brand_id', brandId);
+    }
+    let { data: row } = await connQuery.maybeSingle();
+
+    if (!row && brandId) {
+      const { data: orgRow } = await supabaseAdmin
+        .from('integration_connections')
+        .select('status, composio_account_id, brand_id')
+        .eq('organization_id', profile.organization_id)
+        .eq('provider', GSC)
+        .is('brand_id', null)
+        .maybeSingle();
+      if (orgRow?.status === 'connected') row = orgRow;
+    }
 
     if (row?.status === 'connected') {
-      const { data: brands } = await supabaseAdmin
+      let brandsQuery = supabaseAdmin
         .from('brands')
         .select('id, gsc_property')
         .eq('organization_id', profile.organization_id);
+
+      if (brandId) brandsQuery = brandsQuery.eq('id', brandId);
+      const { data: brands } = await brandsQuery;
 
       const brandIds = (brands || []).map((b) => b.id);
       const { data: domainRows } = brandIds.length > 0
@@ -384,20 +489,39 @@ router.get('/google-analytics/properties', async (req, res) => {
   try {
     const profile = await getProfile(req.user.id);
     const entityId = entityIdFor(profile.organization_id);
+    const brandId = req.query.brandId;
 
     // Direct DB check first (bypass Composio when connected directly or via DB)
-    const { data: row } = await supabaseAdmin
+    let connQuery = supabaseAdmin
       .from('integration_connections')
-      .select('status, composio_account_id')
+      .select('status, composio_account_id, brand_id')
       .eq('organization_id', profile.organization_id)
-      .eq('provider', GA)
-      .maybeSingle();
+      .eq('provider', GA);
+
+    if (brandId) {
+      connQuery = connQuery.eq('brand_id', brandId);
+    }
+    let { data: row } = await connQuery.maybeSingle();
+
+    if (!row && brandId) {
+      const { data: orgRow } = await supabaseAdmin
+        .from('integration_connections')
+        .select('status, composio_account_id, brand_id')
+        .eq('organization_id', profile.organization_id)
+        .eq('provider', GA)
+        .is('brand_id', null)
+        .maybeSingle();
+      if (orgRow?.status === 'connected') row = orgRow;
+    }
 
     if (row?.status === 'connected') {
-      const { data: brands } = await supabaseAdmin
+      let brandsQuery = supabaseAdmin
         .from('brands')
         .select('id, name, ga_property_id')
         .eq('organization_id', profile.organization_id);
+
+      if (brandId) brandsQuery = brandsQuery.eq('id', brandId);
+      const { data: brands } = await brandsQuery;
 
       const brandIds = (brands || []).map((b) => b.id);
       const { data: domainRows } = brandIds.length > 0

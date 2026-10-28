@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select';
 import { BarChart3, Loader2, Search, ShoppingBag, Unplug } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { cn } from '@/lib/utils';
 import {
   getIntegrationStatus,
   disconnectIntegration,
@@ -45,6 +46,7 @@ import { CatalogCategoryPages } from './catalog-category-pages';
 import { MerchantCenterAccounts } from './merchant-center-accounts';
 import { WebflowCard } from './webflow-card';
 import { useIntegrationConnect } from '@/hooks/use-integration-connect';
+import { useBrandStore } from '@/stores/use-brand-store';
 
 /**
  * Settings → Integrations (#577, Google Analytics added in #658).
@@ -61,6 +63,9 @@ import { useIntegrationConnect } from '@/hooks/use-integration-connect';
  */
 export function IntegrationsSection() {
   const t = useTranslations('settings');
+  const { activeBrandId, brands, setActiveBrand } = useBrandStore();
+  const currentBrand = brands.find((b) => b.id === activeBrandId) ?? brands[0] ?? null;
+
   // Bumped when a brand adds a Merchant Center account, so the catalog card lists it.
   const [catalogReads, setCatalogReads] = useState(0);
   // The catalog's sources as its card read them, for the picker to mark the accounts added.
@@ -84,14 +89,50 @@ export function IntegrationsSection() {
         <CardDescription>{t('integrations_description')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Brand Context Indicator & Switcher */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg bg-muted/40 p-3.5 border text-xs">
+          <div className="space-y-0.5">
+            <div className="font-semibold text-foreground flex items-center gap-2">
+              <span>Quản lý kết nối Google cho Brand:</span>
+              <Badge variant="secondary" className="font-bold text-primary px-2.5 py-0.5 text-xs">
+                {currentBrand?.name || 'Mặc định'}
+              </Badge>
+            </div>
+            <p className="text-muted-foreground">
+              Mỗi Brand kết nối và đồng bộ tài khoản Google Search Console / Google Analytics độc lập.
+            </p>
+          </div>
+          {brands.length > 1 && (
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-muted-foreground text-xs font-medium">Đổi Brand:</span>
+              <Select
+                value={currentBrand?.id ?? ''}
+                onValueChange={(val) => val && setActiveBrand(val)}
+              >
+                <SelectTrigger className="h-8 w-44 text-xs bg-background">
+                  <SelectValue placeholder="Chọn brand" />
+                </SelectTrigger>
+                <SelectContent>
+                  {brands.map((b) => (
+                    <SelectItem key={b.id} value={b.id}>
+                      {b.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+
         <IntegrationCard
           provider="google-search-console"
           label="Google Search Console"
           description="Real search queries and impressions for your site — powers prompt suggestions and search-vs-AI insights."
           icon={<Search className="h-5 w-5 text-muted-foreground" />}
           authConfigEnv="COMPOSIO_GSC_AUTH_CONFIG_ID"
+          brandId={activeBrandId}
         >
-          <GscPropertyMapping />
+          <GscPropertyMapping brandId={activeBrandId} />
         </IntegrationCard>
 
         <IntegrationCard
@@ -100,8 +141,9 @@ export function IntegrationsSection() {
           description="Sessions and conversions from your GA4 property — the basis for AI traffic history without installing the tracking snippet."
           icon={<BarChart3 className="h-5 w-5 text-muted-foreground" />}
           authConfigEnv="COMPOSIO_GA_AUTH_CONFIG_ID"
+          brandId={activeBrandId}
         >
-          <GaPropertyMapping />
+          <GaPropertyMapping brandId={activeBrandId} />
         </IntegrationCard>
 
         <IntegrationGroup title={t('integrations_stores')}>
@@ -163,6 +205,7 @@ function IntegrationCard({
   description,
   icon,
   authConfigEnv,
+  brandId,
   hideUnavailable = false,
   children,
 }: {
@@ -171,6 +214,7 @@ function IntegrationCard({
   description: string;
   icon: ReactNode;
   authConfigEnv: string;
+  brandId?: string | null;
   hideUnavailable?: boolean;
   children?: ReactNode;
 }) {
@@ -181,12 +225,13 @@ function IntegrationCard({
   const { connecting, connect: handleConnect } = useIntegrationConnect(provider, {
     label,
     callbackUrl: () => `${window.location.origin}/dashboard/settings?tab=integrations`,
+    brandId,
     onStatus: setStatus,
   });
 
   const load = useCallback(async () => {
     try {
-      const result = await getIntegrationStatus(provider);
+      const result = await getIntegrationStatus(provider, brandId);
       setStatus(result.status);
     } catch (err) {
       console.error(`Failed to load ${provider} status:`, err);
@@ -197,7 +242,7 @@ function IntegrationCard({
       toast.error('Failed to load integration status');
       setStatus('not_connected');
     }
-  }, [provider, hideUnavailable]);
+  }, [provider, brandId, hideUnavailable]);
 
   useEffect(() => {
     load();
@@ -206,7 +251,7 @@ function IntegrationCard({
   const handleDisconnect = async () => {
     setDisconnecting(true);
     try {
-      await disconnectIntegration(provider);
+      await disconnectIntegration(provider, brandId);
       setStatus('not_connected');
       toast.success(`${label} disconnected`);
     } catch (err) {
@@ -346,6 +391,7 @@ function PropertyMapping({
   loadOptions,
   loadRows,
   save,
+  highlightBrandId,
 }: {
   sourceName: string;
   description: string;
@@ -353,6 +399,7 @@ function PropertyMapping({
   loadOptions: () => Promise<PropertyOption[]>;
   loadRows: () => Promise<BrandPropertyRow[]>;
   save: (brandId: string, value: string | null) => Promise<void>;
+  highlightBrandId?: string | null;
 }) {
   const t = useTranslations('settings');
   const [options, setOptions] = useState<PropertyOption[] | null>(null);
@@ -454,33 +501,49 @@ function PropertyMapping({
       </div>
       <p className="text-xs text-muted-foreground">{description}</p>
       <div className="space-y-2">
-        {rows.map((row) => (
-          <div key={row.brandId} className="flex items-center justify-between gap-3">
-            <span className="truncate text-sm">{row.brandName}</span>
-            <div className="flex items-center gap-2">
-              {savingBrandId === row.brandId && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+        {rows.map((row) => {
+          const isHighlighted = highlightBrandId && row.brandId === highlightBrandId;
+          return (
+            <div
+              key={row.brandId}
+              className={cn(
+                'flex items-center justify-between gap-3 p-2 rounded-md transition-colors',
+                isHighlighted ? 'bg-primary/5 border border-primary/20' : '',
               )}
-              <Select
-                items={selectItems}
-                value={row.value ?? null}
-                onValueChange={(v) => handlePick(row.brandId, v ?? NONE_VALUE)}
-              >
-                <SelectTrigger className="h-8 w-64 text-xs">
-                  <SelectValue placeholder={t('integrations_selectProperty')} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE_VALUE}>{t('integrations_notMapped')}</SelectItem>
-                  {options.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="truncate text-sm font-medium">{row.brandName}</span>
+                {isHighlighted && (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-primary/30 text-primary">
+                    Đang chọn
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {savingBrandId === row.brandId && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                )}
+                <Select
+                  items={selectItems}
+                  value={row.value ?? null}
+                  onValueChange={(v) => handlePick(row.brandId, v ?? NONE_VALUE)}
+                >
+                  <SelectTrigger className="h-8 w-64 text-xs">
+                    <SelectValue placeholder={t('integrations_selectProperty')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_VALUE}>{t('integrations_notMapped')}</SelectItem>
+                    {options.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {options.length === 0 && <p className="text-xs text-muted-foreground">{emptyMessage}</p>}
     </div>
@@ -490,8 +553,8 @@ function PropertyMapping({
 // Loaders live at module scope so their identity is stable across renders —
 // PropertyMapping's effects depend on them.
 
-async function loadGscOptions(): Promise<PropertyOption[]> {
-  const properties = await getGscProperties();
+async function loadGscOptions(brandId?: string | null): Promise<PropertyOption[]> {
+  const properties = await getGscProperties(brandId);
   return properties.map((p) => ({ value: p.siteUrl, label: p.siteUrl, siteUrls: [p.siteUrl] }));
 }
 
@@ -505,21 +568,23 @@ async function loadGscRows(): Promise<BrandPropertyRow[]> {
   }));
 }
 
-function GscPropertyMapping() {
+function GscPropertyMapping({ brandId }: { brandId?: string | null }) {
+  const loadOptions = useCallback(() => loadGscOptions(brandId), [brandId]);
   return (
     <PropertyMapping
       sourceName="Search Console"
       description="Pick which Search Console property each brand's data comes from. Brands matching a property by domain are mapped automatically."
       emptyMessage="The connected account has no Search Console properties. Add your site in Search Console first, then retry."
-      loadOptions={loadGscOptions}
+      loadOptions={loadOptions}
       loadRows={loadGscRows}
       save={setBrandGscProperty}
+      highlightBrandId={brandId}
     />
   );
 }
 
-async function loadGaOptions(): Promise<PropertyOption[]> {
-  const properties = await getGaProperties();
+async function loadGaOptions(brandId?: string | null): Promise<PropertyOption[]> {
+  const properties = await getGaProperties(brandId);
   return properties.map((p) => ({
     value: p.propertyId,
     // Display names repeat across accounts ("GA4"), so the id disambiguates.
@@ -540,15 +605,17 @@ async function loadGaRows(): Promise<BrandPropertyRow[]> {
   }));
 }
 
-function GaPropertyMapping() {
+function GaPropertyMapping({ brandId }: { brandId?: string | null }) {
+  const loadOptions = useCallback(() => loadGaOptions(brandId), [brandId]);
   return (
     <PropertyMapping
       sourceName="Analytics"
       description="Pick which GA4 property each brand's data comes from. Brands whose domain matches a property's web data stream are mapped automatically."
       emptyMessage="The connected account has no GA4 properties. Create one in Google Analytics first, then retry."
-      loadOptions={loadGaOptions}
+      loadOptions={loadOptions}
       loadRows={loadGaRows}
       save={setBrandGaProperty}
+      highlightBrandId={brandId}
     />
   );
 }
