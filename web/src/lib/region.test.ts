@@ -16,6 +16,11 @@ describe('region display helpers', () => {
     expect(regionLabel('US')).toBe('United States');
     expect(regionFlag('US')).toBe(usFlag);
     expect(formatRegionDisplay('US')).toBe(`${usFlag} United States`);
+
+    const vnFlag = String.fromCodePoint(0x1f1fb, 0x1f1f3);
+    expect(regionLabel('VN')).toBe('Vietnam');
+    expect(regionFlag('VN')).toBe(vnFlag);
+    expect(formatRegionDisplay('VN')).toBe(`${vnFlag} Vietnam`);
   });
 
   it('normalizes lower-case known region codes', () => {

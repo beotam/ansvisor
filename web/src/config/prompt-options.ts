@@ -19,6 +19,7 @@ export const REGIONS = [
   { code: 'MX', label: 'Mexico' },
   { code: 'SG', label: 'Singapore' },
   { code: 'AE', label: 'United Arab Emirates' },
+  { code: 'VN', label: 'Vietnam' },
 ] as const;
 
 export type RegionCode = (typeof REGIONS)[number]['code'];
@@ -104,6 +105,7 @@ export const LANGUAGES = [
   { code: 'nl', label: 'Dutch (nl)' },
   { code: 'sv', label: 'Swedish (sv)' },
   { code: 'ar', label: 'Arabic (ar)' },
+  { code: 'vi', label: 'Vietnamese (vi)' },
 ] as const;
 
 export type LanguageCode = (typeof LANGUAGES)[number]['code'];
