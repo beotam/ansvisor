@@ -51,6 +51,20 @@ export function useIntegrationConnect(
   const connect = async () => {
     setConnecting(true);
     const gen = ++pollGen.current;
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'GOOGLE_AUTH_SUCCESS') {
+        if (!event.data.provider || event.data.provider === provider) {
+          onStatus('connected');
+          const emailInfo = event.data.email ? ` (${event.data.email})` : '';
+          toast.success(`${label} connected${emailInfo}`);
+        }
+      } else if (event.data?.type === 'GOOGLE_AUTH_ERROR') {
+        toast.error(event.data.error || 'Google connection failed');
+      }
+    };
+    window.addEventListener('message', onMessage);
+
     try {
       const { redirectUrl } = brandId
         ? await connectIntegration(provider, callbackUrl(), brandId)
@@ -99,6 +113,7 @@ export function useIntegrationConnect(
           : 'Failed to start connection',
       );
     } finally {
+      window.removeEventListener('message', onMessage);
       if (pollGen.current === gen) setConnecting(false);
     }
   };

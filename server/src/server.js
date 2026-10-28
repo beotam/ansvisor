@@ -35,6 +35,7 @@ import { sweepWebflowPublished } from './lib/cms/webflow-status.js';
 import { generateBriefForOpportunity } from './routes/content.js';
 import webhookContentCallbackRoutes from './routes/webhook-content-callback.js';
 import webhookContentDraftCallbackRoutes from './routes/webhook-content-draft-callback.js';
+import { handleGoogleOAuthCallback } from './routes/google-oauth-callback.js';
 import { sendImproveActionForKeyUser } from './routes/prompts.js';
 import { readOpportunityInbox, startAutoAudits, startSiteAuditForBrand } from './routes/audits.js';
 import { sweepAutoAudits } from './lib/audit/auto-audit-sweep.js';
@@ -610,6 +611,9 @@ app.use('/cloro/callback', cloroCallbackRoutes);
 // It is mounted outside /api so no dashboard JWT is required; the router has its own stricter limiter.
 app.use('/webhooks/content', webhookContentCallbackRoutes);
 app.use('/webhooks/content-drafts', webhookContentDraftCallbackRoutes);
+
+// Direct Google OAuth callback (public endpoint, receives Google code redirect without dashboard JWT)
+app.get('/api/integrations/google/callback', handleGoogleOAuthCallback);
 
 // --- Authenticated API routes ---
 // Read-only once the plan has ended (middleware/subscription.js): checked

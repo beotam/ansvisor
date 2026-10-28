@@ -220,19 +220,24 @@ function IntegrationCard({
 }) {
   const t = useTranslations('settings');
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
+  const [connectedEmail, setConnectedEmail] = useState<string | null>(null);
   const [unreadable, setUnreadable] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const { connecting, connect: handleConnect } = useIntegrationConnect(provider, {
     label,
     callbackUrl: () => `${window.location.origin}/dashboard/settings?tab=integrations`,
     brandId,
-    onStatus: setStatus,
+    onStatus: (newStatus) => {
+      setStatus(newStatus);
+      if (newStatus === 'connected') load();
+    },
   });
 
   const load = useCallback(async () => {
     try {
       const result = await getIntegrationStatus(provider, brandId);
       setStatus(result.status);
+      setConnectedEmail(result.email ?? null);
     } catch (err) {
       console.error(`Failed to load ${provider} status:`, err);
       if (hideUnavailable) {
@@ -253,6 +258,7 @@ function IntegrationCard({
     try {
       await disconnectIntegration(provider, brandId);
       setStatus('not_connected');
+      setConnectedEmail(null);
       toast.success(`${label} disconnected`);
     } catch (err) {
       toast.error(
@@ -280,9 +286,12 @@ function IntegrationCard({
               {status === 'connected' && (
                 <Badge
                   variant="outline"
-                  className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 gap-1.5"
                 >
-                  {t('integrations_connected')}
+                  <span>{t('integrations_connected')}</span>
+                  {connectedEmail && (
+                    <span className="font-normal opacity-85">· {connectedEmail}</span>
+                  )}
                 </Badge>
               )}
             </div>

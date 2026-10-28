@@ -15,6 +15,8 @@ export interface IntegrationStatusResult {
   configured: boolean;
   status: IntegrationStatus;
   accountId?: string;
+  brandId?: string | null;
+  email?: string | null;
 }
 
 async function authHeaders(): Promise<Record<string, string>> {

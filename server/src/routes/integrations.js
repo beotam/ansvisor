@@ -139,7 +139,7 @@ router.get('/:provider/status', async (req, res) => {
     // 1. Direct Google OAuth & DB status check for Brand (or Org fallback)
     let query = supabaseAdmin
       .from('integration_connections')
-      .select('status, composio_account_id, brand_id')
+      .select('status, composio_account_id, brand_id, google_email')
       .eq('organization_id', profile.organization_id)
       .eq('provider', provider);
 
@@ -155,7 +155,7 @@ router.get('/:provider/status', async (req, res) => {
     if (!row && brandId) {
       const { data: orgRow } = await supabaseAdmin
         .from('integration_connections')
-        .select('status, composio_account_id, brand_id')
+        .select('status, composio_account_id, brand_id, google_email')
         .eq('organization_id', profile.organization_id)
         .eq('provider', provider)
         .is('brand_id', null)
@@ -171,6 +171,7 @@ router.get('/:provider/status', async (req, res) => {
         status: 'connected',
         accountId: row.composio_account_id || 'direct_oauth',
         brandId: row.brand_id || null,
+        email: row.google_email || null,
       });
     }
 
@@ -246,14 +247,17 @@ router.post('/:provider/connect', async (req, res) => {
     }
 
     // Direct Google OAuth flow for this specific brand
-    const googleClientId =
-      process.env.GOOGLE_CLIENT_ID ||
-      '696997862532-r1km81bce8nesj784a0vl6p33hj1lvb8.apps.googleusercontent.com';
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    if (!googleClientId) {
+      return res.status(503).json({ error: 'GOOGLE_CLIENT_ID is not configured on this server.' });
+    }
     const scopes = [
       'https://www.googleapis.com/auth/analytics.readonly',
       'https://www.googleapis.com/auth/analytics.edit',
       'https://www.googleapis.com/auth/webmasters.readonly',
       'https://www.googleapis.com/auth/webmasters',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
     ].join(' ');
 
     const stateObj = {
@@ -261,12 +265,18 @@ router.post('/:provider/connect', async (req, res) => {
       brandId: brandId || null,
       provider,
       userId: req.user.id,
+      returnUrl: callbackUrl,
     };
     const state = Buffer.from(JSON.stringify(stateObj)).toString('base64url');
 
+    const serverUrl =
+      process.env.PUBLIC_API_URL ||
+      (req.headers['x-forwarded-proto'] || req.protocol) + '://' + (req.headers['x-forwarded-host'] || req.get('host'));
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${serverUrl}/api/integrations/google/callback`;
+
     const params = new URLSearchParams({
       client_id: googleClientId,
-      redirect_uri: callbackUrl || 'http://127.0.0.1:8089',
+      redirect_uri: redirectUri,
       response_type: 'code',
       scope: scopes,
       access_type: 'offline',
@@ -275,11 +285,12 @@ router.post('/:provider/connect', async (req, res) => {
     });
     const redirectUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 
-    // Mark as connected for this brand
+    // Mark as pending while user authorizes
     await upsertConnectionRow(profile.organization_id, provider, {
       brand_id: brandId || null,
       composio_account_id: `direct_google_${provider}`,
-      status: 'connected',
+      composio_entity_id: `direct_google_${profile.organization_id}`,
+      status: 'pending',
       connected_by: req.user.id,
     });
 
