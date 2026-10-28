@@ -222,8 +222,6 @@ router.delete('/:provider', async (req, res) => {
     const provider = resolveProvider(req, res);
     if (!provider) return;
 
-    if (!isComposioConfigured(provider)) return notConfigured(res, provider);
-
     const profile = await getProfile(req.user.id);
     if (!WRITE_ROLES.includes(profile.role)) {
       return res
@@ -310,7 +308,7 @@ router.get('/google-search-console/properties', async (req, res) => {
       return res.json({ properties });
     }
 
-    if (!isComposioConfigured(GSC)) return notConfigured(res, GSC);
+    if (!isComposioConfigured(GSC)) return res.json({ properties: [] });
 
     const active = await getActiveConnection(GSC, entityId);
     if (!active) {
@@ -429,7 +427,7 @@ router.get('/google-analytics/properties', async (req, res) => {
       return res.json({ properties });
     }
 
-    if (!isComposioConfigured(GA)) return notConfigured(res, GA);
+    if (!isComposioConfigured(GA)) return res.json({ properties: [] });
 
     const active = await getActiveConnection(GA, entityId);
     if (!active) {

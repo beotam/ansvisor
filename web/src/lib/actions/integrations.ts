@@ -32,13 +32,17 @@ async function authHeaders(): Promise<Record<string, string>> {
 export async function getIntegrationStatus(
   provider: IntegrationProvider,
 ): Promise<IntegrationStatusResult> {
-  const res = await fetch(`${API_BASE_URL}/api/integrations/${provider}/status`, {
-    headers: await authHeaders(),
-    cache: 'no-store',
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `Server error: ${res.status}`);
-  return body as IntegrationStatusResult;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/integrations/${provider}/status`, {
+      headers: await authHeaders(),
+      cache: 'no-store',
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { configured: false, status: 'not_configured' };
+    return body as IntegrationStatusResult;
+  } catch {
+    return { configured: false, status: 'not_configured' };
+  }
 }
 
 /**
@@ -197,13 +201,17 @@ export interface GscProperty {
 }
 
 export async function getGscProperties(): Promise<GscProperty[]> {
-  const res = await fetch(`${API_BASE_URL}/api/integrations/google-search-console/properties`, {
-    headers: await authHeaders(),
-    cache: 'no-store',
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `Server error: ${res.status}`);
-  return (body.properties ?? []) as GscProperty[];
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/integrations/google-search-console/properties`, {
+      headers: await authHeaders(),
+      cache: 'no-store',
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return [];
+    return (body.properties ?? []) as GscProperty[];
+  } catch {
+    return [];
+  }
 }
 
 export interface GscBrandMapping {
@@ -252,13 +260,17 @@ export interface GaProperty {
 }
 
 export async function getGaProperties(): Promise<GaProperty[]> {
-  const res = await fetch(`${API_BASE_URL}/api/integrations/google-analytics/properties`, {
-    headers: await authHeaders(),
-    cache: 'no-store',
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `Server error: ${res.status}`);
-  return (body.properties ?? []) as GaProperty[];
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/integrations/google-analytics/properties`, {
+      headers: await authHeaders(),
+      cache: 'no-store',
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return [];
+    return (body.properties ?? []) as GaProperty[];
+  } catch {
+    return [];
+  }
 }
 
 export interface GaBrandMapping {

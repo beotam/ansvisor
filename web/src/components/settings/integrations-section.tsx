@@ -210,7 +210,11 @@ function IntegrationCard({
       setStatus('not_connected');
       toast.success(`${label} disconnected`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to disconnect');
+      toast.error(
+        err instanceof Error && !err.message.includes('Minified React error')
+          ? err.message
+          : 'Failed to disconnect',
+      );
     } finally {
       setDisconnecting(false);
     }
@@ -405,7 +409,11 @@ function PropertyMapping({
       await save(brandId, value);
     } catch (err) {
       setRows(previous);
-      toast.error(err instanceof Error ? err.message : 'Failed to save property');
+      toast.error(
+        err instanceof Error && !err.message.includes('Minified React error')
+          ? err.message
+          : 'Failed to save property',
+      );
     } finally {
       setSavingBrandId(null);
     }

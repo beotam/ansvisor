@@ -89,7 +89,11 @@ export function useIntegrationConnect(
         toast.error('Connection timed out — try again.');
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to start connection');
+      toast.error(
+        err instanceof Error && !err.message.includes('Minified React error')
+          ? err.message
+          : 'Failed to start connection',
+      );
     } finally {
       if (pollGen.current === gen) setConnecting(false);
     }
