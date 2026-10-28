@@ -10,22 +10,43 @@ import { nestsTooDeep } from '../html-depth.js';
 const SCRAPEDO_API = 'https://api.scrape.do';
 
 function getToken() {
-  const token = process.env.SCRAPEDO_API_KEY;
-  if (!token) throw new Error('SCRAPEDO_API_KEY must be configured');
-  return token;
+  return process.env.SCRAPEDO_API_KEY || null;
 }
 
 /**
  * Fetch a URL through Scrape.do and return the rendered HTML. A page nested
  * deeper than any browser keeps comes back not ok, with no HTML and the error
  * 'too_deep', so it isn't parsed (html-depth.js).
+ * Falls back to direct fetch when SCRAPEDO_API_KEY is not configured.
  *
  * @param {string} targetUrl
  * @param {{ render?: boolean }} [opts]
  * @returns {Promise<{ ok: boolean, status: number, html: string, contentType: string|null, error?: string }>}
  */
 export async function fetchViaScrapeDo(targetUrl, { render = true, retries = 1 } = {}) {
-  const params = new URLSearchParams({ token: getToken(), url: targetUrl });
+  const token = getToken();
+  if (!token) {
+    try {
+      const res = await fetch(targetUrl, {
+        headers: {
+          'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        redirect: 'follow',
+      });
+      const html = await res.text();
+      const contentType = res.headers.get('content-type');
+      if (res.ok && nestsTooDeep(html)) {
+        return { ok: false, status: res.status, html: '', contentType, error: 'too_deep' };
+      }
+      return { ok: res.ok, status: res.status, html, contentType };
+    } catch (err) {
+      return { ok: false, status: 0, html: '', contentType: null, error: err.message };
+    }
+  }
+
+  const params = new URLSearchParams({ token, url: targetUrl });
   if (render) params.set('render', 'true');
   const endpoint = `${SCRAPEDO_API}/?${params.toString()}`;
 
